@@ -14,13 +14,16 @@ SenseVoice-small
 Fun-ASR-Nano | 放 ASR Nano
 Qwen3-ASR | 千问ASR | 千问3ASR
 Qwen3-TTS | 千问TTS | 千问3TTS
+RAG | 2 AG | 2AG
 Claude | 克劳德 | 克劳得 | cloud ~~~ weather | sky 
 Claude Code | cloud cold | cloud code
-我家鸽鸽
 config_client.py | config_client 点 py | config_client
 config_server.py | config_server 点 py | config_server
 Llama.cpp | 拉马点 CPP
-
+OpenCode | open call
+Pi Agent | py agent
+Agent | A 镇的 | A 镇
+MCP | MCB
 
 # ====== 专业术语 ======
 CUDA | 酷的 | kuda 
@@ -29,6 +32,13 @@ TensorRT
 DirectML
 TensorFlow
 Transformer
+Function Calling
+Tool Calling
+Nexus Compainion
+Lynx Code
+Gemini
+VS Code
+LLM
 
 # ====== 自定义短语示例 ======
 18200006666 | 我的手机号 | input my phone
