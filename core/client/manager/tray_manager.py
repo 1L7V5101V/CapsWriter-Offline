@@ -27,21 +27,31 @@ class TrayManager:
             logger.warning(f"托盘模块导入失败，跳过托盘功能: {e}")
             return
 
+        # 构建额外菜单项
+        more = [
+            ('📋 复制结果', self._copy_last_result),
+            ('📝 上下文', self._add_context),
+            ('✨ 热词', self._add_hotword),
+            ('🧹 清除记忆', self._clear_memory),
+            ('♻️ 重开音频', self._restart_audio),
+        ]
+
+        # 系统音频输出设备选择子菜单
+        if Config.system_audio_enabled:
+            dev_menu = self._build_loopback_menu()
+            if dev_menu:
+                from pystray import MenuItem as _MI
+                more.append(_MI('🔊 切换输出设备', dev_menu))
+
         # 获取图标路径
         icon_path = os.path.join(self.app.base_dir, 'assets', 'icon.ico')
-        
+
         # 启用托盘
         enable_min_to_tray(
             'CapsWriter Client',
             icon_path,
             exit_callback=self.app.stop,
-            more_options=[
-                ('📋 复制结果', self._copy_last_result),
-                ('📝 上下文', self._add_context),
-                ('✨ 热词', self._add_hotword),
-                ('🧹 清除记忆', self._clear_memory),
-                ('♻️ 重开音频', self._restart_audio),
-            ]
+            more_options=more,
         )
         logger.info("托盘图标已启用")
 
@@ -56,6 +66,37 @@ class TrayManager:
             logger.info("TrayManager: 托盘图标已卸载")
         except Exception as e:
             logger.debug(f"TrayManager: 卸载托盘时发生错误: {e}")
+
+    def _build_loopback_menu(self):
+        """构建输出设备选择子菜单"""
+        try:
+            devices = self.app.stream.ensure_loopback_cache()
+            if not devices:
+                return None
+
+            from pystray import Menu as _Menu
+            from pystray import MenuItem as _MI
+
+            items = []
+            for dev in devices:
+                name = dev['name']
+                idx = dev['idx']
+                label = f"● {name}" if dev.get('default') else f"  {name}"
+                items.append(_MI(label, lambda i=idx: self._on_switch_device(i)))
+
+            return _Menu(*items)
+        except Exception as e:
+            logger.warning(f"构建输出设备菜单失败: {e}")
+            return None
+
+    def _on_switch_device(self, device_idx: int):
+        """切换输出设备回调"""
+        try:
+            if hasattr(self.app, 'stream') and self.app.stream:
+                self.app.stream.switch_loopback_device(device_idx)
+                logger.info(f"用户切换输出设备: idx={device_idx}")
+        except Exception as e:
+            logger.error(f"切换输出设备失败: {e}")
 
     def _restart_audio(self):
         """重启音频流回调"""

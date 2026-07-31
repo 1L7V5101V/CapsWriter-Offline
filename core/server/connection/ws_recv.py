@@ -69,7 +69,7 @@ async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) 
     socket_id = str(websocket.id)
 
     # 麦克风首次消息 → GPU 加速
-    if is_start and msg.source == 'mic' and Config.gpu_boost_enabled:
+    if is_start and msg.source in ('mic', 'system') and Config.gpu_boost_enabled:
         queue_in.put(Task(
             type='cmd',
             task_id='gpu_boost',
@@ -89,7 +89,7 @@ async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) 
         cache.byte_count += len(data)
 
         # 终段全量重识别：留存整段录音（仅 mic，且不超过时长上限时才有用）
-        if (msg.source == 'mic'
+        if (msg.source in ('mic', 'system')
                 and getattr(Config, 'mic_final_full_enabled', False)
                 and cache.total_duration
                     <= getattr(Config, 'mic_final_full_max_duration', 30)):
@@ -97,7 +97,7 @@ async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) 
 
         if not msg.is_final:
             # 打印状态消息
-            if msg.source == 'mic':
+            if msg.source in ('mic', 'system'):
                 status_mic.start()
             if msg.source == 'file' and is_start:
                 console.print('正在接收音频文件...')
@@ -140,7 +140,7 @@ async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) 
                         >= getattr(Config, 'mic_preview_interval', 0.6)):
                 cache.last_preview = time.time()
                 queue_in.put(Task(
-                    type='mic',
+                    type=msg.source,
                     data=cache.chunks,
                     offset=cache.offset,
                     task_id=msg.task_id,
@@ -160,7 +160,7 @@ async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) 
 
         else:  # is_final
             # 打印状态消息
-            if msg.source == 'mic':
+            if msg.source in ('mic', 'system'):
                 status_mic.stop()
             elif msg.source == 'file':
                 print(f'音频文件接收完毕，时长 {cache.total_duration:.2f}s')
@@ -170,7 +170,7 @@ async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) 
             # 终段全量重识别（two-pass 第二遍）：录音未超上限时，用整段录音
             # 一次性识别替换分段拼接结果，消除接缝错误；超长退回分段拼接。
             use_full = (
-                msg.source == 'mic'
+                msg.source in ('mic', 'system')
                 and getattr(Config, 'mic_final_full_enabled', False)
                 and cache.full_chunks
                 and cache.total_duration

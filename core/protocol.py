@@ -27,7 +27,7 @@ class AudioMessage:
         seg_overlap: 重叠时长（秒）
     """
     task_id: str
-    source: Literal['mic', 'file']
+    source: Literal['mic', 'file', 'system']
     data: str                    # base64 编码的音频
     is_final: bool
     time_start: float

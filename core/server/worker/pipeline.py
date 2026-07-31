@@ -89,7 +89,7 @@ class TaskPipeline:
         return Result(
             task_id=task.task_id,
             socket_id=task.socket_id,
-            type='mic',
+            type=task.type,
             duration=session.result.duration,
             time_start=task.time_start,
             time_submit=task.time_submit,

@@ -478,6 +478,9 @@ class ListeningIsland:
         # 完成确认态（DONE）的进入时刻（真实时钟，tick 节拍有系统级抖动）
         self._done_since: float = 0.0
 
+        # IDLE 态文字（可通过 set_idle_text() 修改，系统音频模式切换用）
+        self._idle_text = "就绪"
+
         # 动画弹簧（药丸矩形，物理像素）
         self._spring_w = _Spring(IDLE_W)
         self._spring_x = _Spring(0.0, omega=15.0, zeta=0.9)
@@ -598,6 +601,13 @@ class ListeningIsland:
                 cfg[k] = tuple(cfg[k])
         cfg['rings'] = [(tuple(c), r, d) for c, r, d in cfg['rings']]
         return cfg
+
+    def set_idle_text(self, text: str) -> None:
+        """设置 IDLE 态显示的文字（线程安全）"""
+        self._idle_text = text
+        # 如果当前在 IDLE 态，强制刷新
+        if self._state == 'IDLE':
+            self._queue.put(('refresh', None))
 
     @staticmethod
     def _random_vivid() -> tuple:
@@ -762,6 +772,8 @@ class ListeningIsland:
                     self._on_partial(val)
                 elif kind == 'level':
                     latest_level = val
+                elif kind == 'refresh':
+                    self._show_window()
 
             if latest_level is not None:
                 self._on_level(latest_level)
@@ -1311,7 +1323,7 @@ class ListeningIsland:
 
         # 文字
         if state == 'IDLE':
-            label, bold, col = '就绪', False, FG_DIM
+            label, bold, col = self._idle_text, False, FG_DIM
         elif state == 'ARMED':
             label, bold, col = '可以说话了', True, FG
         elif state == 'PROCESSING':

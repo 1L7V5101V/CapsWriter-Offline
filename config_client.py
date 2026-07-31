@@ -55,6 +55,11 @@ class ClientConfig:
 
     mute_system_audio = True        # 录音时是否静音系统声音输出
 
+    # 系统音频捕获（WASAPI Loopback）
+    system_audio_enabled = True              # 是否启用系统音频捕获功能
+    system_audio_loopback_device = None      # 指定输出设备名关键词（None=默认输出设备）
+    system_audio_switch_key = 'tab+f1'       # 切换快捷键（当前仅支持 'tab+f1'）
+
     # "正在听" 灵动岛浮窗（录音时在屏幕顶部弹出黑色药丸提示，实时反馈麦克风状态）
     listening_island_enabled = True     # 是否启用
     listening_island_min_threshold = 0.006  # 人声检测/音量条满量程下限（float32 归一化 RMS）

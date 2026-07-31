@@ -22,8 +22,11 @@ config_server.py | config_server 点 py | config_server
 Llama.cpp | 拉马点 CPP
 OpenCode | open call
 Pi Agent | py agent
-Agent | A 镇的 | A 镇
+Agent | A 镇的 | A 镇 | A 这个
 MCP | MCB
+Python | 拍嗓
+Openclaw | open Claude | OpenClaude
+
 
 # ====== 专业术语 ======
 CUDA | 酷的 | kuda 

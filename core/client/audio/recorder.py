@@ -64,6 +64,10 @@ class AudioRecorder:
         """快捷访问桥接到 app.ws"""
         return self.app.ws
     
+    def _get_source(self) -> str:
+        """根据当前模式获取音频源标识"""
+        return 'system' if self.state.system_audio_active else 'mic'
+
     async def _send_message(self, message: AudioMessage) -> None:
         """发送消息到服务端"""
         if not self._ws_manager.is_connected:
@@ -142,7 +146,7 @@ class AudioRecorder:
                         seg_dur, seg_ov = Config.mic_seg_duration, Config.mic_seg_overlap
                     message = AudioMessage(
                         task_id=self.task_id,
-                        source='mic',
+                        source=self._get_source(),
                         data=base64.b64encode(
                             np.mean(data[::3], axis=1).tobytes()
                         ).decode('utf-8'),
@@ -200,7 +204,7 @@ class AudioRecorder:
                         seg_dur, seg_ov = Config.mic_seg_duration, Config.mic_seg_overlap
                     message = AudioMessage(
                         task_id=self.task_id,
-                        source='mic',
+                        source=self._get_source(),
                         data='',
                         is_final=True,
                         time_start=self._start_time,

@@ -95,6 +95,160 @@ class AudioStreamManager:
         self._channels = 1
         self._running = False  # 标志是否应该运行
 
+        # WASAPI Loopback 系统音频捕获
+        self._wasapi_capturer = None
+        self._loopback_devices_cache = []
+        self._system_audio_enabled = False
+
+    @property
+    def system_audio_enabled(self) -> bool:
+        return self._system_audio_enabled
+
+    # ========== WASAPI Loopback 系统音频捕获 ==========
+
+    def ensure_loopback_cache(self) -> list[dict]:
+        """惰性初始化 loopback 设备缓存"""
+        if not self._loopback_devices_cache:
+            try:
+                from .wasapi_loopback import list_loopback_devices
+                self._loopback_devices_cache = list_loopback_devices()
+                logger.info(f"WASAPI loopback 设备缓存: {len(self._loopback_devices_cache)} 个设备")
+            except Exception as e:
+                logger.warning(f"WASAPI 设备枚举失败: {e}")
+                self._loopback_devices_cache = []
+        return self._loopback_devices_cache
+
+    def list_loopback_devices_safe(self) -> list[dict]:
+        """获取缓存的 loopback 设备列表"""
+        return self._loopback_devices_cache
+
+    def set_system_audio_mode(self, active: bool) -> None:
+        """
+        切换系统音频捕获模式。
+
+        切换/关闭时如果正在录音，当前录音缓冲立刻 flush 并送入 Server。
+        """
+        if active == self._system_audio_enabled:
+            return
+
+        if active:
+            # 切换到系统音频模式
+            self._ensure_wasapi_capturer()
+            self._system_audio_enabled = True
+            self.state.system_audio_active = True
+            logger.info("已切换到系统音频捕获模式")
+        else:
+            # 切换回麦克风模式
+            self._stop_wasapi_capturer()
+            self._system_audio_enabled = False
+            self.state.system_audio_active = False
+            logger.info("已切换到麦克风模式")
+
+        # 更新灵动岛空闲文字
+        self._update_island_idle_text()
+
+    def switch_loopback_device(self, device_idx: int) -> None:
+        """切换 WASAPI 输出设备"""
+        is_active = self._system_audio_enabled
+        # 先停掉当前捕获
+        self._stop_wasapi_capturer()
+        # 更新缓存
+        devices = self.ensure_loopback_cache()
+        if device_idx < 0 or device_idx >= len(devices):
+            logger.warning(f"无效的设备索引: {device_idx}")
+            return
+        self._loopback_device_idx = device_idx
+        # 如果之前在系统音频模式，重新启动
+        if is_active:
+            self._ensure_wasapi_capturer()
+            self._wake_wasapi()
+            logger.info(f"已切换到输出设备: {devices[device_idx]['name']}")
+
+    def _ensure_wasapi_capturer(self) -> None:
+        """确保 WASAPI 捕获器已创建"""
+        if self._wasapi_capturer is not None:
+            return
+        try:
+            from .wasapi_loopback import WasapiLoopbackCapture
+            self._wasapi_capturer = WasapiLoopbackCapture(
+                device_idx=getattr(self, '_loopback_device_idx', None)
+            )
+            self._wasapi_capturer.start(self._wasapi_callback)
+        except Exception as e:
+            logger.error(f"创建 WASAPI 捕获器失败: {e}")
+            self._wasapi_capturer = None
+
+    def _stop_wasapi_capturer(self) -> None:
+        """停止并释放 WASAPI 捕获器"""
+        if self._wasapi_capturer is not None:
+            self._wasapi_capturer.stop()
+            self._wasapi_capturer = None
+
+    def _wake_wasapi(self) -> None:
+        """唤醒 WASAPI 捕获（开始录音时）"""
+        if self._wasapi_capturer is not None:
+            self._wasapi_capturer.wake()
+
+    def _wasapi_callback(self, data: np.ndarray) -> None:
+        """WASAPI loopback 音频数据回调"""
+        if not self._running or not self.state.recording:
+            return
+        if not self._system_audio_enabled:
+            return
+
+        import asyncio
+
+        # 推送能量到灵动岛
+        try:
+            island = _get_island()
+            if island:
+                rms = float(np.sqrt(np.mean(np.square(data.astype(np.float32)))))
+                island.push_level(rms)
+        except Exception:
+            pass
+
+        if self.app.loop and self.state.queue_in:
+            asyncio.run_coroutine_threadsafe(
+                self.state.queue_in.put({
+                    'type': 'data',
+                    'time': time.time(),
+                    'data': data.copy(),
+                }),
+                self.app.loop
+            )
+
+    def _update_island_idle_text(self) -> None:
+        """根据当前音频模式更新灵动岛空闲文字"""
+        try:
+            island = _get_island()
+            if island:
+                if self._system_audio_enabled:
+                    island.set_idle_text("系统音频监听中")
+                else:
+                    island.set_idle_text("就绪")
+        except Exception:
+            pass
+
+    def notify_recording_start(self) -> None:
+        """录音开始时通知（唤醒 WASAPI 捕获器和灵动岛）"""
+        if self._system_audio_enabled:
+            self._wake_wasapi()
+        try:
+            island = _get_island()
+            if island:
+                island.arm()
+        except Exception:
+            pass
+
+    def notify_recording_stop(self) -> None:
+        """录音停止时通知（灵动岛进入识别态）"""
+        try:
+            island = _get_island()
+            if island:
+                island.processing()
+        except Exception:
+            pass
+
     @property
     def state(self) -> ClientState:
         """快捷访问状态单例"""
@@ -114,6 +268,10 @@ class AudioStreamManager:
         """
         # 只在录音状态时处理数据
         if not self.state.recording:
+            return
+
+        # 系统音频模式时跳过麦克风输入
+        if self._system_audio_enabled:
             return
 
         import asyncio

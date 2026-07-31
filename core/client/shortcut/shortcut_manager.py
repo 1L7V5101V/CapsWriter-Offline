@@ -64,6 +64,9 @@ class ShortcutManager:
         # 按键恢复状态追踪
         self._restoring_keys = set()
 
+        # 组合键状态（Tab+F1 系统音频切换）
+        self._tab_pressed = False
+
         # 事件处理器
         self._event_handler = ShortcutEventHandler(self.tasks, self._pool, self._emulator)
 
@@ -104,6 +107,21 @@ class ShortcutManager:
             if self._check_emulating(key_name, msg):
                 return True
             if self._check_restoring(key_name, msg):
+                return True
+
+            # Tab 键状态跟踪（用于 Tab+F1 组合键切换音频源）
+            if key_name == 'tab':
+                if msg in KEY_DOWN_MESSAGES:
+                    self._tab_pressed = True
+                elif msg in KEY_UP_MESSAGES:
+                    self._tab_pressed = False
+                # Tab 单独按下不放行（不影响系统功能）
+                return True
+
+            # Tab+F1 检测
+            if key_name == 'f1' and self._tab_pressed:
+                if msg in KEY_DOWN_MESSAGES:
+                    self._on_switch_source()
                 return True
 
             # 查找匹配的快捷键
@@ -246,6 +264,29 @@ class ShortcutManager:
             self.clear_restoring_flag(key_name)
 
         return True  # 放行
+
+    def _on_switch_source(self) -> None:
+        """Tab+F1 切换音频源"""
+        from config_client import ClientConfig as Config
+        if not Config.system_audio_enabled:
+            logger.info("[系统音频] 功能未启用，跳过切换")
+            return
+
+        try:
+            stream = self.app.stream
+            if stream is None:
+                return
+            new_mode = not stream.system_audio_enabled
+            stream.set_system_audio_mode(new_mode)
+            mode_name = "系统音频" if new_mode else "麦克风"
+            logger.info(f"[系统音频] Tab+F1 已切换到: {mode_name}")
+            from core.client.audio.stream import _get_island
+            island = _get_island()
+            if island:
+                from ..ui import toast
+                toast(f"已切换到 {mode_name}", duration=2000, bg="#075077")
+        except Exception as e:
+            logger.error(f"[系统音频] 切换失败: {e}", exc_info=True)
 
     # ========== 公共接口 ==========
 

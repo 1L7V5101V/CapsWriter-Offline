@@ -92,17 +92,15 @@ class ShortcutTask:
         # 打印动画：正在录音
         self._status.start()
 
-        # "正在听" 灵动岛：上膛（检测到声音才弹出）
+        # 通知音频流管理器（灵动岛上膛 + 系统音频唤醒）
         try:
-            from core.client.audio.stream import _get_island
-            island = _get_island()
-            if island:
-                island.arm()
+            if self.app.stream:
+                self.app.stream.notify_recording_start()
         except Exception as e:
-            logger.warning(f"[灵动岛] launch 上膛失败: {e}")
+            logger.warning(f"[录音] 通知音频流失败: {e}")
 
-        # 静音系统声音
-        if Config.mute_system_audio:
+        # 静音系统声音（系统音频捕获时不静音）
+        if Config.mute_system_audio and not self.state.system_audio_active:
             SystemAudioMute.mute()
 
         # 启动识别任务
@@ -129,8 +127,8 @@ class ShortcutTask:
         except Exception:
             pass
 
-        # 恢复系统声音
-        if Config.mute_system_audio:
+        # 恢复系统声音（系统音频捕获时没静音，无需恢复）
+        if Config.mute_system_audio and not self.state.system_audio_active:
             SystemAudioMute.unmute()
 
         self.task.cancel()
@@ -144,17 +142,15 @@ class ShortcutTask:
         self.state.stop_recording()
         self._status.stop()
 
-        # 灵动岛：松开键 → 进入识别中态（等服务端返回结果再回空闲）
+        # 通知音频流管理器（灵动岛进入识别态）
         try:
-            from core.client.audio.stream import _get_island
-            island = _get_island()
-            if island:
-                island.processing()
-        except Exception:
-            pass
+            if self.app.stream:
+                self.app.stream.notify_recording_stop()
+        except Exception as e:
+            logger.warning(f"[录音] 通知音频流停止失败: {e}")
 
-        # 恢复系统声音
-        if Config.mute_system_audio:
+        # 恢复系统声音（系统音频捕获时没静音，无需恢复）
+        if Config.mute_system_audio and not self.state.system_audio_active:
             SystemAudioMute.unmute()
 
         asyncio.run_coroutine_threadsafe(

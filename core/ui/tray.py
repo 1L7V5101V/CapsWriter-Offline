@@ -230,8 +230,14 @@ class _TraySystem:
 
         # 添加额外选项
         if more_options:
-            for opt_name, opt_func in more_options:
-                menu_items.append(item(opt_name, opt_func))
+            for opt in more_options:
+                if isinstance(opt, tuple) and len(opt) == 2:
+                    # (名称, 回调) 格式
+                    opt_name, opt_func = opt
+                    menu_items.append(item(opt_name, opt_func))
+                else:
+                    # MenuItem 对象（支持子菜单）
+                    menu_items.append(opt)
 
         menu_items.append(item('🔄 重启', self.on_restart))
         menu_items.append(item('❌ 退出', self.on_exit))
