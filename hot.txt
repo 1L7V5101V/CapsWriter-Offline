@@ -22,11 +22,18 @@ config_server.py | config_server 点 py | config_server
 Llama.cpp | 拉马点 CPP
 OpenCode | open call
 Pi Agent | py agent
-Agent | A 镇的 | A 镇 | A 这个
+Agent | A 镇的 | A 镇
 MCP | MCB
 Python | 拍嗓
 Openclaw | open Claude | OpenClaude
-
+具身智能 | 巨神智能
+全栈工程师 | 全站工程师
+势垒层 | 室内层
+挠曲光伏 | 脑曲光谱 | 导取光伏
+挠曲电 | 脑曲电 | 导取电 | 导曲线
+本征硅 | 本正规
+DeepSeek Harness | DEEP SEA HARNESS
+肖特基结 | 消特集结
 
 # ====== 专业术语 ======
 CUDA | 酷的 | kuda 
@@ -42,6 +49,27 @@ Lynx Code
 Gemini
 VS Code
 LLM
+COMSOL
+本征硅
+势垒层
+高阻硅
+具身智能
+肖特基结
+挠曲电
+有效挠曲电系数
+俄歇平衡
+载流子
+skill
+redis
+mcp
+mvcc
+分布式事务
+消息队列
+jev
+java
+ai
+
+
 
 # ====== 自定义短语示例 ======
 18200006666 | 我的手机号 | input my phone
