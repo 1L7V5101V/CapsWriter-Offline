@@ -1,4 +1,3 @@
-# coding: utf-8
 """
 WebSocket 接收处理模块
 
@@ -11,17 +10,23 @@ from base64 import b64decode
 
 import websockets
 
-from ..state import console
-from ..schema import Task
 from config_server import ServerConfig as Config
-from core.protocol import AudioMessage
 from core.constants import AudioFormat
+from core.protocol import AudioMessage
 from core.tools.my_status import Status
+
 from .. import logger
+from ..schema import Task
+from ..state import console
 
-
-# 麦克风接收状态指示器
+# 音频接收状态指示器（麦克风与系统音频各一个，避免两路并行时互相 start/stop）
 status_mic = Status('正在接收音频', spinner='point')
+status_system = Status('正在接收系统音频', spinner='point')
+
+
+def _status(source: str) -> Status:
+    """获取指定音频源的接收状态指示器"""
+    return status_system if source == 'system' else status_mic
 
 
 class AudioCache:
@@ -56,13 +61,15 @@ class AudioCache:
         self.full_chunks = b''
 
 
-async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) -> None:
+async def message_handler(websocket, msg: AudioMessage, caches: dict[str, AudioCache], app) -> None:
     """
     处理客户端发送的音频消息
 
     根据消息中的分段参数，将音频数据分段后提交到识别队列。
+    caches 按音频源（mic / system / file）分槽，麦克风与系统音频可同时录音互不干扰。
     """
     queue_in = app.state.queue_in
+    cache = caches.setdefault(msg.source, AudioCache())
 
     global status_mic
     is_start = not bool(cache.chunks)
@@ -98,7 +105,7 @@ async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) 
         if not msg.is_final:
             # 打印状态消息
             if msg.source in ('mic', 'system'):
-                status_mic.start()
+                _status(msg.source).start()
             if msg.source == 'file' and is_start:
                 console.print('正在接收音频文件...')
                 logger.info(f"开始接收音频文件，任务ID: {msg.task_id}")
@@ -161,7 +168,7 @@ async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) 
         else:  # is_final
             # 打印状态消息
             if msg.source in ('mic', 'system'):
-                status_mic.stop()
+                _status(msg.source).stop()
             elif msg.source == 'file':
                 print(f'音频文件接收完毕，时长 {cache.total_duration:.2f}s')
                 logger.info(f"音频文件接收完毕，任务ID: {msg.task_id}, 时长: {cache.total_duration:.2f}s")
@@ -169,7 +176,7 @@ async def message_handler(websocket, msg: AudioMessage, cache: AudioCache, app) 
             # 提交最终片段。
             # 终段全量重识别（two-pass 第二遍）：录音未超上限时，用整段录音
             # 一次性识别替换分段拼接结果，消除接缝错误；超长退回分段拼接。
-            use_full = (
+            use_full = bool(
                 msg.source in ('mic', 'system')
                 and getattr(Config, 'mic_final_full_enabled', False)
                 and cache.full_chunks
@@ -223,8 +230,8 @@ async def ws_recv(websocket, app) -> None:
     console.print(f'[bold green]客户端已连接: {remote[0]}:{remote[1]}[/bold green]\n')
     logger.info(f"新客户端连接: {websocket}, ID: {socket_id}")
 
-    # 创建音频缓冲区
-    cache = AudioCache()
+    # 创建音频缓冲区（按音频源分槽: mic / system / file）
+    caches: dict[str, AudioCache] = {}
 
     # 接收并处理消息
     try:
@@ -234,7 +241,7 @@ async def ws_recv(websocket, app) -> None:
                 data = json.loads(raw_message)
                 msg = AudioMessage.from_dict(data)
                 # 处理音频数据
-                await message_handler(websocket, msg, cache, app)
+                await message_handler(websocket, msg, caches, app)
             except Exception as e:
                 logger.error(f"消息解析失败: {str(e)}")
                 continue
@@ -253,7 +260,7 @@ async def ws_recv(websocket, app) -> None:
     finally:
         # 清理资源
         status_mic.stop()
-        status_mic.on = False
+        status_system.stop()
         sockets.pop(socket_id, None)
         if socket_id in sockets_id:
             sockets_id.remove(socket_id)
