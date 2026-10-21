@@ -8,6 +8,7 @@ import subprocess
 import time
 import ctypes
 from config_server import ServerConfig as Config
+from core.tools.no_window import NO_WINDOW
 from . import logger
 
 
@@ -36,7 +37,8 @@ class GpuBoostManager:
 
         logger.info(f"GPU 加速命令: {Config.gpu_boost_cmd}")
         subprocess.run(Config.gpu_boost_cmd, shell=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=NO_WINDOW)
         self.state.gpu_boosted = True
         self.state.gpu_last_active = 0  # 0 表示已加速但尚未有实际音频任务使用过
 
@@ -58,7 +60,8 @@ class GpuBoostManager:
 
         logger.info(f"GPU 闲置 {idle_time:.0f}s，取消加速: {Config.gpu_unboost_cmd}")
         subprocess.run(Config.gpu_unboost_cmd, shell=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=NO_WINDOW)
         self.state.gpu_boosted = False
         self.state.gpu_last_active = 0.0
 

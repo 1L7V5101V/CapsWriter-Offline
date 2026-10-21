@@ -22,6 +22,7 @@ from core.protocol import AudioMessage, RecognitionMessage
 from .media_tool import MediaTool
 from .result_handler import ResultHandler
 from . import logger
+from core.tools.no_window import NO_WINDOW
 from core.tools.token_sync import sync_tokens_from_text
 
 if TYPE_CHECKING:
@@ -103,7 +104,8 @@ class FileTranscriber:
             process = await asyncio.create_subprocess_exec(
                 *ffmpeg_cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL
+                stderr=asyncio.subprocess.DEVNULL,
+                creationflags=NO_WINDOW,
             )
             
             # 分块大小：1分钟音频 (16000 * 4 * 60 bytes)

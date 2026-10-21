@@ -9,6 +9,7 @@ import subprocess
 import numpy as np
 import soundfile as sf
 from pathlib import Path
+from core.tools.no_window import NO_WINDOW
 from . import logger
 
 
@@ -113,7 +114,8 @@ def load_audio_ffmpeg(audio_path, sample_rate=24000, start_second=None, duration
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        bufsize=0
+        bufsize=0,
+        creationflags=NO_WINDOW,
     )
 
     raw_bytes, stderr = process.communicate()

@@ -5,6 +5,7 @@
 负责维护单机识别进程的生命周期，包括启动、模型加载监控、异常退出捕获。
 """
 from __future__ import annotations
+import io
 import sys
 import os
 import queue
@@ -49,7 +50,17 @@ class ProcessManager:
         state.sockets_id = Manager().list()
         
         # 获取标准输入文件描述符，用于 Windows 下的信号传递补丁
-        stdin_fn = sys.stdin.fileno()
+        # 注意：以 windowed/无控制台方式启动（如打包后的启动器隐藏控制台）时
+        # sys.stdin 可能为 None，此时回退到 devnull，避免 AttributeError。
+        try:
+            stdin_fn = sys.stdin.fileno() if sys.stdin is not None else None
+        except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+            stdin_fn = None
+        if stdin_fn is None:
+            try:
+                stdin_fn = os.open(os.devnull, os.O_RDONLY)
+            except OSError:
+                stdin_fn = None
         
         # 3. 创建并启动进程
         self._process = Process(

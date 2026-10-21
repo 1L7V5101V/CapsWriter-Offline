@@ -21,6 +21,7 @@ import threading
 import platform
 import subprocess
 from typing import Optional
+from core.tools.no_window import NO_WINDOW
 from . import logger, set_ui_logger
 
 # 退出回调函数（由主程序传入）
@@ -225,8 +226,11 @@ class _TraySystem:
         # 定义菜单
         menu_items = [
             item(f"{self.title}", lambda: None, enabled=False),
-            item('👁️ 显示/隐藏', self.toggle_window, default=True),
         ]
+        # 只有存在控制台窗口时，“显示/隐藏”才有意义。
+        # 打包成无控制台窗口的 GUI 程序时 self.hwnd 为 0。
+        if self.hwnd:
+            menu_items.append(item('👁️ 显示/隐藏', self.toggle_window, default=True))
 
         # 添加额外选项
         if more_options:
@@ -277,7 +281,7 @@ class _TraySystem:
                 cmd = sys.argv
             else:
                 cmd = [sys.executable] + sys.argv
-            subprocess.Popen(cmd)
+            subprocess.Popen(cmd, creationflags=NO_WINDOW)
         except Exception as e:
             logger.error(f"重启失败: {e}")
             return
@@ -335,7 +339,7 @@ class _TraySystem:
         t_monitor = threading.Thread(target=self.monitor_loop, daemon=True)
         t_monitor.start()
 
-        # 启动时隐藏窗口
+        # 启动时隐藏窗口（无控制台窗口时 toggle_window 内部会直接返回）
         self.toggle_window()
 
 
@@ -343,7 +347,8 @@ def enable_min_to_tray(name: Optional[str] = None, icon_path: Optional[str] = No
     """
     启用最小化到托盘功能
 
-    如果检测不到控制台窗口（如 .pyw 运行），则不执行任何操作。
+    控制台窗口是可选的：没有控制台窗口（如打包成 console=False 的 GUI 程序）
+    时托盘照常创建，只是菜单里不再提供“显示/隐藏”。
     如果在 Linux 等无 GUI 环境下运行，也会跳过。
 
     Args:
@@ -352,8 +357,6 @@ def enable_min_to_tray(name: Optional[str] = None, icon_path: Optional[str] = No
         exit_callback: 退出回调函数，当用户点击托盘退出菜单时调用
         more_options: 额外菜单项列表，格式为 [(名称, 回调函数), ...]
     """
-    global _tray_instance
-
     global _tray_instance
 
     # 设置退出回调函数
@@ -376,9 +379,8 @@ def enable_min_to_tray(name: Optional[str] = None, icon_path: Optional[str] = No
         if _tray_instance is not None:
             return  # 已启动
 
-        if not _get_console_hwnd():
-            return  # 没有控制台窗口
-
+        # 不再要求必须有控制台窗口：打包版的客户端/服务端都没有控制台窗口，
+        # 而托盘菜单是用户唯一的正常退出入口。
         _tray_instance = _TraySystem(name, icon_path, more_options)
         _tray_instance.start()
 
