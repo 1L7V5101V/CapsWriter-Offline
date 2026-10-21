@@ -1,4 +1,3 @@
-# coding: utf-8
 """
 快捷键配置数据类
 
@@ -7,7 +6,10 @@
 """
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
+
+# 快捷键绑定的音频源：'mic' 麦克风 / 'system' 系统音频
+ShortcutSource = Literal['mic', 'system']
 
 
 @dataclass
@@ -22,6 +24,7 @@ class Shortcut:
         hold_mode: 长按模式。True=按下录音松开停止；False=单击开始再次单击停止
         threshold: 按下快捷键后触发语音识别的时间阈值（秒），用于防止误触。None 表示使用 Config.threshold
         enabled: 是否启用此快捷键
+        source: 录音的音频源，'mic' 麦克风 / 'system' 系统音频（两者可同时录音）
 
     注意：
         - 非阻塞模式下，对于可恢复的切换键（CapsLock/NumLock/ScrollLock），会自动补发以恢复状态
@@ -31,8 +34,9 @@ class Shortcut:
     type: Literal['keyboard', 'mouse'] = 'keyboard'
     suppress: bool = False
     hold_mode: bool = True
-    threshold: Optional[float] = None  # None 表示使用 Config.threshold
+    threshold: float | None = None  # None 表示使用 Config.threshold
     enabled: bool = True
+    source: ShortcutSource = 'mic'  # 该快捷键录音的音频源
 
     def __post_init__(self):
         """初始化后验证配置"""

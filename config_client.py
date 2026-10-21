@@ -1,6 +1,4 @@
 import os
-from collections.abc import Iterable
-from pathlib import Path
 
 # 版本信息
 __version__ = '3.0'
@@ -14,22 +12,42 @@ class ClientConfig:
     addr = '127.0.0.1'          # Server 地址
     port = '6016'               # Server 端口
 
-    # 快捷键配置列表
+    # 快捷键配置列表（每个快捷键可以绑定不同的音频源，两路可同时录音）
     shortcuts = [
         {
             'key': 'caps_lock',     # 监听大写锁定键
             'type': 'keyboard',     # 是键盘快捷键
             'suppress': True,      # 阻塞按键（短按会补发）
             'hold_mode': True,      # 长按模式
-            'enabled': True         # 启用此快捷键
+            'enabled': True,        # 启用此快捷键
+            'source': 'mic',        # 录音来源：麦克风
         },
         {
             'key': 'x2',
             'type': 'mouse',
             'suppress': True,
             'hold_mode': True,
-            'enabled': True
+            'enabled': True,
+            'source': 'mic',
         },
+        {
+            'key': 'x1',           # 长按鼠标侧键（一般是“后退”键）录音，松开上屏（录系统音频）
+            'type': 'mouse',
+            # suppress=True：鼠标侧键事件被吞掉，不会触发浏览器的“后退”
+            'suppress': True,
+            'hold_mode': True,
+            'enabled': True,
+            'source': 'system',     # 录音来源：系统音频（扬声器回环）
+        },
+        # 想改用键盘录系统音频时，把上面这块换成下面这块（注意 Alt 会吞掉 Alt+Tab）
+        # {
+        #     'key': 'alt',         # 长按 Alt 录音，松开上屏（录系统音频）
+        #     'type': 'keyboard',
+        #     'suppress': True,
+        #     'hold_mode': True,
+        #     'enabled': True,
+        #     'source': 'system',
+        # },
     ]
 
     threshold    = 0.3          # 快捷键触发阈值（秒）
@@ -42,7 +60,7 @@ class ClientConfig:
 
     save_audio = True           # 是否保存录音文件
     audio_name_len = 20         # 将录音识别结果的前多少个字存储到录音文件名中，建议不要超过200
-    
+
     context = ''                # 提示词上下文，用于辅助 Fun-ASR-Nano 模型识别（例如输入人名、地名、专业术语等）
     language = 'auto'           # 识别语言：'auto', 'chinese', 'english', 'japanese' 等（各引擎支持范围不同）
 
@@ -53,12 +71,11 @@ class ClientConfig:
     traditional_convert = False     # 是否将识别结果转换为繁体中文
     traditional_locale = 'zh-hant'  # 繁体地区：'zh-hant'（标准繁体）, 'zh-tw'（台湾繁体）, 'zh-hk'（香港繁体）
 
-    mute_system_audio = True        # 录音时是否静音系统声音输出
+    mute_system_audio = False       # 录音时是否静音系统声音输出
 
-    # 系统音频捕获（WASAPI Loopback）
+    # 系统音频捕获（WASAPI Loopback，由 soundcard 实现）
     system_audio_enabled = True              # 是否启用系统音频捕获功能
     system_audio_loopback_device = None      # 指定输出设备名关键词（None=默认输出设备）
-    system_audio_switch_key = 'tab+f1'       # 切换快捷键（当前仅支持 'tab+f1'）
 
     # "正在听" 灵动岛浮窗（录音时在屏幕顶部弹出黑色药丸提示，实时反馈麦克风状态）
     listening_island_enabled = True     # 是否启用
@@ -129,6 +146,8 @@ r"""
   suppress   - 是否阻塞按键（True=阻塞，False=不阻塞）
   hold_mode  - 长按模式（True=按下录音松开停止，False=单击开始再次单击停止）
   enabled    - 是否启用此快捷键
+  source     - 录音来源：'mic'（麦克风）或 'system'（系统音频）。
+               两个来源彼此独立、可同时录音；'system' 需要 system_audio_enabled = True
 
 阻塞模式说明：
   - 阻塞模式  ：长按录音识别，短按（<0.3秒）则自动补发按键，不影响单击功能
@@ -144,6 +163,7 @@ r"""
   功能键：f1 - f24
 
   控制键:
+      alt（= alt_l，按住左/右 Alt 均可，推荐用于系统音频听写）
       ctrl_l,   ctrl_r,
       shift,  shift_r,
       alt_l,    alt_gr,
@@ -156,11 +176,12 @@ r"""
 
   方向键：up, down, left, right
 
-  鼠标键：x1, x2
+  鼠标键：x1, x2（鼠标侧键，一般是浏览器“后退/前进”键）
 
 示例配置：
-  {'key': 'caps_lock', 'type': 'keyboard', 'suppress': False, 'hold_mode': True, 'enabled': True}, 
-  {'key': 'f12', 'type': 'keyboard', 'suppress': True, 'hold_mode': True, 'enabled': True}, 
-  {'key': 'x2', 'type': 'mouse', 'suppress': True, 'hold_mode': True, 'enabled': True}, 
+  {'key': 'caps_lock', 'type': 'keyboard', 'suppress': False, 'hold_mode': True, 'enabled': True, 'source': 'mic'},
+  {'key': 'x1', 'type': 'mouse', 'suppress': True, 'hold_mode': True, 'enabled': True, 'source': 'system'},
+  {'key': 'f12', 'type': 'keyboard', 'suppress': True, 'hold_mode': True, 'enabled': True, 'source': 'mic'},
+  {'key': 'x2', 'type': 'mouse', 'suppress': True, 'hold_mode': True, 'enabled': True, 'source': 'mic'},
 """
 

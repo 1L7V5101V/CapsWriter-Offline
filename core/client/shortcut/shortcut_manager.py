@@ -1,4 +1,3 @@
-# coding: utf-8
 """
 快捷键管理器（重构版）
 
@@ -7,26 +6,50 @@
 2. 防止不同按键互相干扰
 3. restore 功能的防自捕获逻辑
 4. hold_mode 和 click_mode 支持
+5. 不同快捷键绑定不同音频源（麦克风 / 系统音频）
 """
 from __future__ import annotations
+
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 from pynput import keyboard, mouse
 
-from . import logger
-from core.client.shortcut.key_mapper import *
-from core.client.shortcut.key_mapper import KeyMapper
 from core.client.shortcut.emulator import ShortcutEmulator
 from core.client.shortcut.event_handler import ShortcutEventHandler
+from core.client.shortcut.key_mapper import (
+    KEY_DOWN_MESSAGES,
+    KEY_UP_MESSAGES,
+    KEYBOARD_MESSAGES,
+    MOUSE_MESSAGES,
+    WM_KEYUP,
+    WM_SYSKEYUP,
+    WM_XBUTTONDOWN,
+    WM_XBUTTONUP,
+    XBUTTON1,
+    KeyMapper,
+)
 from core.client.shortcut.task import ShortcutTask
 
+from . import logger
+
 if TYPE_CHECKING:
+    from core.client.app import CapsWriterClient
     from core.client.shortcut.shortcut_config import Shortcut
     from core.client.state import ClientState
-    from core.client.app import CapsWriterClient
 
+# 同一物理键在上报时的不同名称（Windows 一般上报 alt，少数环境上报 alt_l / alt_gr）
+_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    'alt': ('alt_l', 'alt_gr'),
+}
+
+
+def _suppress_event(listener) -> None:
+    """抑制当前按键事件（pynput 的 Listener 在运行期提供 suppress_event）"""
+    suppress = getattr(listener, 'suppress_event', None)
+    if callable(suppress):
+        suppress()
 
 
 class ShortcutManager:
@@ -37,7 +60,7 @@ class ShortcutManager:
     所有事件处理都在 win32_event_filter 中完成，确保高性能和低延迟。
     """
 
-    def __init__(self, app: CapsWriterClient, shortcuts: List[Shortcut]):
+    def __init__(self, app: CapsWriterClient, shortcuts: list[Shortcut]):
         """
         初始化快捷键管理器
 
@@ -49,11 +72,11 @@ class ShortcutManager:
         self.shortcuts = shortcuts
 
         # 监听器
-        self.keyboard_listener: Optional[keyboard.Listener] = None
-        self.mouse_listener: Optional[mouse.Listener] = None
+        self.keyboard_listener: keyboard.Listener | None = None
+        self.mouse_listener: mouse.Listener | None = None
 
         # 快捷键任务映射（key -> ShortcutTask）
-        self.tasks: Dict[str, ShortcutTask] = {}
+        self.tasks: dict[str, ShortcutTask] = {}
 
         # 线程池
         self._pool = ThreadPoolExecutor(max_workers=4)
@@ -63,9 +86,6 @@ class ShortcutManager:
 
         # 按键恢复状态追踪
         self._restoring_keys = set()
-
-        # 组合键状态（Tab+F1 系统音频切换）
-        self._tab_pressed = False
 
         # 事件处理器
         self._event_handler = ShortcutEventHandler(self.tasks, self._pool, self._emulator)
@@ -91,6 +111,9 @@ class ShortcutManager:
             task.pool = self._pool
             task.threshold = shortcut.get_threshold(Config.threshold)
             self.tasks[shortcut.key] = task
+            # 为同一物理键的其它上报名称注册别名（不影响用户显式配置的 alt_l/alt_gr）
+            for alias in _KEY_ALIASES.get(shortcut.key, ()):
+                self.tasks.setdefault(alias, task)
 
     # ========== 监听器创建 ==========
 
@@ -109,21 +132,6 @@ class ShortcutManager:
             if self._check_restoring(key_name, msg):
                 return True
 
-            # Tab 键状态跟踪（用于 Tab+F1 组合键切换音频源）
-            if key_name == 'tab':
-                if msg in KEY_DOWN_MESSAGES:
-                    self._tab_pressed = True
-                elif msg in KEY_UP_MESSAGES:
-                    self._tab_pressed = False
-                # Tab 单独按下不放行（不影响系统功能）
-                return True
-
-            # Tab+F1 检测
-            if key_name == 'f1' and self._tab_pressed:
-                if msg in KEY_DOWN_MESSAGES:
-                    self._on_switch_source()
-                return True
-
             # 查找匹配的快捷键
             if key_name not in self.tasks:
                 return True
@@ -138,7 +146,7 @@ class ShortcutManager:
 
             # 阻塞事件
             if task.shortcut.suppress and self.keyboard_listener:
-                self.keyboard_listener.suppress_event()
+                _suppress_event(self.keyboard_listener)
 
             return True
 
@@ -173,7 +181,7 @@ class ShortcutManager:
 
             # 阻塞事件
             if task.shortcut.suppress and self.mouse_listener:
-                self.mouse_listener.suppress_event()
+                _suppress_event(self.mouse_listener)
 
             return True
 
@@ -265,29 +273,6 @@ class ShortcutManager:
 
         return True  # 放行
 
-    def _on_switch_source(self) -> None:
-        """Tab+F1 切换音频源"""
-        from config_client import ClientConfig as Config
-        if not Config.system_audio_enabled:
-            logger.info("[系统音频] 功能未启用，跳过切换")
-            return
-
-        try:
-            stream = self.app.stream
-            if stream is None:
-                return
-            new_mode = not stream.system_audio_enabled
-            stream.set_system_audio_mode(new_mode)
-            mode_name = "系统音频" if new_mode else "麦克风"
-            logger.info(f"[系统音频] Tab+F1 已切换到: {mode_name}")
-            from core.client.audio.stream import _get_island
-            island = _get_island()
-            if island:
-                from ..ui import toast
-                toast(f"已切换到 {mode_name}", duration=2000, bg="#075077")
-        except Exception as e:
-            logger.error(f"[系统音频] 切换失败: {e}", exc_info=True)
-
     # ========== 公共接口 ==========
 
     def start(self) -> None:
@@ -328,17 +313,17 @@ class ShortcutManager:
             try:
                 self.keyboard_listener.stop()
                 logger.debug("键盘监听器已停止")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"停止键盘监听器失败: {e}")
             finally:
                 self.keyboard_listener = None
-                
+
         if self.mouse_listener:
             try:
                 self.mouse_listener.stop()
                 logger.debug("鼠标监听器已停止")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"停止鼠标监听器失败: {e}")
             finally:
                 self.mouse_listener = None
 

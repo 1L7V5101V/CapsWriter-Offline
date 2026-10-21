@@ -11,10 +11,11 @@ import os
 
 from rich.markdown import Markdown
 
+from config_client import ClientConfig as Config
+from config_client import __version__
 from core.client.state import console
-from config_client import ClientConfig as Config, __version__
-from . import logger
 
+from . import logger
 
 
 def _format_shortcut_name(key: str) -> str:
@@ -50,10 +51,10 @@ def _get_shortcuts_display() -> str:
 class TipsDisplay:
     """
     提示信息显示器
-    
+
     显示客户端启动时的提示信息。
     """
-    
+
     @staticmethod
     def show_mic_tips() -> None:
         """显示麦克风模式的启动提示"""
@@ -90,10 +91,11 @@ class TipsDisplay:
 注意事项：
 
 1. 当前快捷键：`{shortcuts_display}`，可在 `config.py` 中修改。
-2. 按 **Tab+F1** 可在麦克风和系统音频捕获间切换（需在 config 中启用 `system_audio_enabled`）。
-2. 如需在管理员权限运行的程序（如任务管理器、游戏）中输入，请**以管理员权限运行客户端**。
-3. 识别结果默认去除末尾逗句号。
-4. 录音保存功能：若检测到 `FFmpeg`，会以 `mp3` 压缩保存；否则保存为 `wav` 。
+2. 长按**鼠标侧键**（默认 X1，一般是“后退”键）可录**系统音频**（扬声器/耳机里播放的声音），与麦克风听写互不影响，可同时使用
+   （需 `system_audio_enabled = True`，快捷键在 `shortcuts` 里配 `'source': 'system'`）。
+3. 如需在管理员权限运行的程序（如任务管理器、游戏）中输入，请**以管理员权限运行客户端**。
+4. 识别结果默认去除末尾逗句号。
+5. 录音保存功能：若检测到 `FFmpeg`，会以 `mp3` 压缩保存；否则保存为 `wav` 。
         '''
 
         console.print(Markdown(markdown), highlight=True)
@@ -104,7 +106,7 @@ class TipsDisplay:
         console.line()
 
         logger.debug("已显示麦克风模式启动提示")
-    
+
     @staticmethod
     def show_file_tips() -> None:
         """显示文件转录模式的启动提示"""
@@ -114,5 +116,5 @@ class TipsDisplay:
         console.print(Markdown(markdown), highlight=True)
         console.print(f'当前基文件夹：[cyan underline]{os.getcwd()}[/]')
         console.print(f'服务端地址： [cyan underline]{Config.addr}:{Config.port}[/]')
-        
+
         logger.debug("已显示文件转录模式启动提示")

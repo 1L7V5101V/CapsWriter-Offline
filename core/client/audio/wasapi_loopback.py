@@ -1,248 +1,241 @@
-# coding: utf-8
 """
-WASAPI Loopback 音频捕获模块
+系统音频（WASAPI Loopback）捕获模块
 
-通过 OpenCode 的 native-recorder-nodejs 原生模块
-（已预编译的 C++ WASAPI 实现）捕获系统扬声器输出。
+后端使用 `soundcard`（Windows 下为 WASAPI loopback），纯 Python，无需 Node 桥接。
+默认跟随系统默认输出设备（含蓝牙耳机），也可用关键词指定输出设备。
 
-不需要 Python WASAPI 实现，通过 Node.js 子进程桥接。
+输出统一为 **16000Hz 单声道 float32**，与麦克风送服务端的格式一致，
+因此后续识别链路无需关心音频来源。
 
 用法：
     devices = list_loopback_devices()
-    capturer = WasapiLoopbackCapture(device_idx=0)
-    capturer.start(callback_fn)
-    capturer.wake()
+    capture = SystemAudioCapture(device_keyword=None)
+    capture.start(callback_fn)     # callback 收到 np.float32 一维数组
     ...
-    capturer.stop()
+    capture.stop()
 """
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
 import threading
-import time
-from pathlib import Path
-from typing import Callable, Optional
+from collections.abc import Callable
+from types import ModuleType
 
 import numpy as np
 
 from . import logger
 
-# ======================================================================
-# Node.js 可执行文件路径
-# ======================================================================
-
-_NODE_PATH = None
-import shutil as _su
-for _p in ["D:/Node/node.exe", "C:/Program Files/nodejs/node.exe"]:
-    if Path(_p).exists():
-        _NODE_PATH = _p
-        break
-if not _NODE_PATH:
-    _node_from_path = _su.which("node")
-    if _node_from_path:
-        _NODE_PATH = _node_from_path
-if not _NODE_PATH:
-    _NODE_PATH = "node"  # 最后回退
-
-# ======================================================================
-# OpenCode 项目 native-recorder-nodejs 模块路径
-# ======================================================================
-
-_OPENCODE_NM = Path(
-    "D:/.Projects/OpenCode/node_modules/.bun/"
-    "native-recorder-nodejs@1.2.0/node_modules/native-recorder-nodejs"
-)
-_HELPER_SCRIPT = Path(__file__).parent / "wasapi_helper.cjs"
+try:
+    import soundcard as _sc
+except Exception as _exc:  # 后端缺失时不影响麦克风听写
+    _sc = None
+    _IMPORT_ERROR: Exception | None = _exc
+else:
+    _IMPORT_ERROR = None
 
 
-def list_loopback_devices() -> list[dict]:
-    """
-    枚举输出设备。
+# 与服务端约定的送样格式：16kHz 单声道
+SAMPLE_RATE = 16000
+# 每次回调的块大小（100ms），兼顾延迟与开销
+BLOCK_FRAMES = 1600
 
-    通过 Node.js helper 枚举 Windows WASAPI 输出设备，
-    保证与 native-recorder-nodejs 兼容的设备 ID。
+# COM 初始化相关常量（soundcard 底层是 WASAPI）
+_COINIT_MULTITHREADED = 0x0
+_COM_S_OK = 0x0
+_COM_S_FALSE = 0x1
+_COM_RPC_E_CHANGED_MODE = 0x80010106
+
+
+def _com_initialize() -> bool:
+    """在当前线程初始化 COM（MTA）
+
+    soundcard 的 COM 初始化发生在 `import soundcard` 所在线程（通常是主线程），
+    而采集跑在独立线程里。子线程未初始化 COM 就打开设备会报
+    0x800401F0 (CO_E_NOTINITIALIZED)，所以采集线程必须自己初始化。
+
+    Returns:
+        本线程结束时是否需要调用 `CoUninitialize`
     """
     try:
-        script = _ensure_helper()
-        r = subprocess.run(
-            [_NODE_PATH, str(script), "--list"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if r.returncode != 0:
-            raise RuntimeError(r.stderr[:200])
-
-        devices = []
-        for line in r.stdout.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                dev = json.loads(line)
-                devices.append(dev)
-            except json.JSONDecodeError:
-                pass
-        return devices
+        import ctypes
+        hr = ctypes.windll.ole32.CoInitializeEx(None, _COINIT_MULTITHREADED) & 0xFFFFFFFF
     except Exception as e:
-        logger.warning(f"枚举输出设备失败: {e}")
-        return []
+        logger.warning(f"[系统音频] COM 初始化异常: {e}")
+        return False
+
+    if hr in (_COM_S_OK, _COM_S_FALSE):  # 本次初始化成功（S_FALSE 表示已初始化过）
+        return True
+    if hr == _COM_RPC_E_CHANGED_MODE:  # 线程已用其它模式初始化，直接用
+        return False
+    logger.warning(f"[系统音频] COM 初始化失败: 0x{hr:08X}")
+    return False
 
 
-def _ensure_helper() -> Path:
-    """确保 helper 脚本存在"""
-    if not _HELPER_SCRIPT.exists():
-        raise FileNotFoundError(f"Helper 脚本未找到: {_HELPER_SCRIPT}")
-    return _HELPER_SCRIPT
+def _com_uninitialize() -> None:
+    """与 `_com_initialize` 配对释放 COM"""
+    try:
+        import ctypes
+        ctypes.windll.ole32.CoUninitialize()
+    except Exception as e:
+        logger.debug(f"[系统音频] COM 释放异常: {e}")
 
 
-class WasapiLoopbackCapture:
+def _backend() -> ModuleType:
+    """取 soundcard 模块，不可用时抛错"""
+    if _sc is None:
+        raise RuntimeError(f"soundcard 后端不可用: {_IMPORT_ERROR}")
+    return _sc
+
+
+def _default_speaker_name() -> str:
+    """系统默认输出设备名（取不到时返回空串）"""
+    try:
+        return str(_backend().default_speaker().name)
+    except Exception as e:
+        logger.warning(f"[系统音频] 获取默认输出设备失败: {e}")
+        return ''
+
+
+def _loopback_sources() -> list:
+    """枚举可作为 loopback 源的输出设备"""
+    return [
+        mic for mic in _backend().all_microphones(include_loopback=True)
+        if getattr(mic, 'isloopback', False)
+    ]
+
+
+def _resolve_device(keyword: str | None = None):
     """
-    WASAPI Loopback 音频捕获器。
+    选择 loopback 设备。
 
-    通过 Node.js 子进程 + native-recorder-nodejs 原生模块捕获音频。
+    优先按关键词匹配，其次系统默认输出设备，最后回退到第一个可用设备。
+    """
+    sources = _loopback_sources()
+    if not sources:
+        raise RuntimeError("未找到可用于 loopback 的输出设备")
+
+    if keyword:
+        lowered = keyword.lower()
+        for mic in sources:
+            if lowered in str(mic.name).lower():
+                return mic
+        logger.warning(f"[系统音频] 未找到匹配 '{keyword}' 的输出设备，回退到系统默认输出")
+
+    default_name = _default_speaker_name()
+    for mic in sources:
+        if str(mic.name) == default_name:
+            return mic
+    return sources[0]
+
+
+def list_loopback_devices(keyword: str | None = None) -> list[dict]:
+    """
+    枚举可用于系统音频捕获的输出设备。
+
+    Args:
+        keyword: 当前配置的设备关键词（用于标记被选中的设备）
+
+    Returns:
+        [{'idx': 序号, 'name': 设备名, 'default': 是否系统默认, 'selected': 是否被配置选中}]
+    """
+    # 可能从任意线程调用（如托盘菜单线程），需先初始化该线程的 COM
+    com_ready = _com_initialize()
+    try:
+        try:
+            sources = _loopback_sources()
+        except Exception as e:
+            logger.warning(f"[系统音频] 枚举输出设备失败: {e}")
+            return []
+
+        default_name = _default_speaker_name()
+        devices: list[dict] = []
+        for idx, mic in enumerate(sources):
+            name = str(mic.name)
+            devices.append({
+                'idx': idx,
+                'name': name,
+                'default': name == default_name,
+                'selected': bool(keyword) and keyword.lower() in name.lower(),
+            })
+        return devices
+    finally:
+        if com_ready:
+            _com_uninitialize()
+
+
+class SystemAudioCapture:
+    """
+    系统音频采集线程。
+
+    在独立线程里跑 soundcard 的 loopback recorder，每 100ms 通过回调送出
+    一块 16kHz 单声道 float32 数据。停止时释放设备句柄，下次 start 重新打开，
+    这样输出设备热切换（插拔耳机 / 蓝牙重连）后重新开始录音即可生效。
     """
 
-    SAMPLE_RATE = 16000
+    SAMPLE_RATE = SAMPLE_RATE
+    BLOCK_FRAMES = BLOCK_FRAMES
 
-    def __init__(self, device_idx: Optional[int] = None):
-        self._device_idx = device_idx
-        self._device_id: Optional[str] = None
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._wake_event = threading.Event()
-        self._callback: Optional[Callable[[np.ndarray], None]] = None
-        self._process: Optional[subprocess.Popen] = None
+    def __init__(self, device_keyword: str | None = None):
+        """
+        Args:
+            device_keyword: 输出设备名关键词，None 表示跟随系统默认输出设备
+        """
+        self._device_keyword = device_keyword
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._callback: Callable[[np.ndarray], None] | None = None
+        self._device_name: str = ''
 
-    def start(self, callback: Callable[[np.ndarray], None]) -> None:
-        if self._running:
-            return
-        self._callback = callback
-        self._running = True
-        self._wake_event.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="wasapi-loopback")
-        self._thread.start()
-        logger.info(f"WASAPI loopback 已启动 (device_idx={self._device_idx})")
-
-    def stop(self) -> None:
-        if not self._running:
-            return
-        self._running = False
-        self._wake_event.set()
-        self._stop_process()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3)
-        self._thread = None
-        self._callback = None
-        logger.info("WASAPI loopback 已停止")
-
-    def wake(self) -> None:
-        self._wake_event.set()
+    @property
+    def device_name(self) -> str:
+        """当前采集的输出设备名"""
+        return self._device_name
 
     @property
     def is_active(self) -> bool:
-        return self._running and self._thread is not None and self._thread.is_alive()
+        """是否正在采集"""
+        return self._thread is not None and self._thread.is_alive()
 
-    def _stop_process(self):
-        if self._process:
-            try:
-                self._process.terminate()
-            except Exception:
-                pass
-            try:
-                self._process.wait(timeout=2)
-            except Exception:
-                pass
-            self._process = None
-
-    def _loop(self):
-        while self._running:
-            self._wake_event.wait()
-            if not self._running:
-                break
-            self._wake_event.clear()
-            self._capture_once()
-
-    def _capture_once(self):
-        """通过 Node.js 子进程捕获一次录音会话"""
-        if not _OPENCODE_NM.exists():
-            logger.error(f"native-recorder-nodejs 未找到: {_OPENCODE_NM}")
+    def start(self, callback: Callable[[np.ndarray], None]) -> None:
+        """启动采集（重复调用无副作用）"""
+        if self.is_active:
             return
+        self._callback = callback
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name='system-audio',
+        )
+        self._thread.start()
 
+    def stop(self) -> None:
+        """停止采集并等待线程退出"""
+        self._stop_event.set()
+        thread, self._thread = self._thread, None
+        if thread and thread.is_alive():
+            thread.join(timeout=2.0)
+        self._callback = None
+
+    def _loop(self) -> None:
+        """采集线程主循环"""
+        com_ready = _com_initialize()
         try:
-            script = _ensure_helper()
-
-            args = [_NODE_PATH, str(script), "--capture"]
-            if self._device_idx is not None:
-                args.extend(["--device", str(self._device_idx)])
-
-            self._process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-
-            # 从 stdout 读取 PCM 数据（int16, 16kHz mono）
-            # helper 输出头信息（JSON 行）后持续输出原始 PCM
-            stdout = self._process.stdout
-            stderr = self._process.stderr
-
-            if not stdout:
-                return
-
-            # 读取头行（格式信息）
-            header_line = stdout.readline()
-            try:
-                header = json.loads(header_line.decode("utf-8", errors="replace").strip())
-                sample_rate = header.get("sampleRate", 48000)
-                channels = header.get("channels", 1)
-                sample_format = header.get("format", "int16")
-                logger.debug(f"Helper header: {header}")
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                sample_rate, channels, sample_format = 48000, 1, "int16"
-
-            # 计算帧大小
-            if sample_format == "int16":
-                bytes_per_sample = 2
-                dtype = np.int16
-            else:
-                bytes_per_sample = 2
-                dtype = np.int16
-
-            frame_size = bytes_per_sample
-            chunk_frames = int(sample_rate * 0.05)  # 50ms
-            chunk_bytes = chunk_frames * frame_size
-
-            # 持续读取音频
-            while self._running and self._wake_event.is_set():
-                raw = stdout.read(chunk_bytes)
-                if not raw or len(raw) < frame_size:
-                    break
-
-                data = np.frombuffer(raw, dtype=dtype).astype(np.float32)
-                if len(data) > 0:
-                    # int16 → float32
-                    data /= 32768.0
-                    # 降采样到 16kHz（如需要）
-                    if sample_rate != self.SAMPLE_RATE and len(data) > 1:
-                        ratio = self.SAMPLE_RATE / sample_rate
-                        new_len = max(1, int(len(data) * ratio))
-                        indices = np.linspace(0, len(data) - 1, new_len)
-                        data = np.interp(indices, np.arange(len(data)), data).astype(np.float32)
-
-                    if self._callback:
-                        self._callback(data)
-
-            # 检查 stderr 中的错误
-            err = stderr.read()
-            if err:
-                err_text = err.decode("utf-8", errors="replace").strip()
-                if err_text:
-                    logger.warning(f"Helper stderr: {err_text}")
-
+            device = _resolve_device(self._device_keyword)
+            self._device_name = str(device.name)
+            logger.info(f"[系统音频] 开始采集: {self._device_name}")
+            with device.recorder(
+                samplerate=self.SAMPLE_RATE, channels=1,
+            ) as recorder:
+                while not self._stop_event.is_set():
+                    frames = recorder.record(numframes=self.BLOCK_FRAMES)
+                    if frames is None or len(frames) == 0:
+                        continue
+                    block = np.asarray(frames, dtype=np.float32).reshape(-1)
+                    callback = self._callback
+                    if callback is not None:
+                        callback(block)
         except Exception as e:
-            if self._running:
-                logger.error(f"WASAPI 捕获异常: {e}", exc_info=True)
+            logger.error(f"[系统音频] 采集失败: {e}", exc_info=True)
         finally:
-            self._stop_process()
+            logger.info(f"[系统音频] 采集结束: {self._device_name or '未知设备'}")
+            if com_ready:
+                _com_uninitialize()

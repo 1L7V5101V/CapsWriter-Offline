@@ -1,4 +1,3 @@
-# coding: utf-8
 """
 快捷键任务模块
 
@@ -6,21 +5,26 @@
 """
 
 from __future__ import annotations
+
 import asyncio
 import time
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
+
+from config_client import ClientConfig as Config
+from core.client.audio.mute_audio import SystemAudioMute
+from core.tools.my_status import Status
 
 from . import logger
-from core.tools.my_status import Status
-from core.client.audio.mute_audio import SystemAudioMute
-from config_client import ClientConfig as Config
- 
+
 if TYPE_CHECKING:
-    from core.client.shortcut.shortcut_config import Shortcut
-    from core.client.state import ClientState
-    from core.client.audio.recorder import AudioRecorder
     from core.client.app import CapsWriterClient
+    from core.client.audio.recorder import AudioRecorder
+    from core.client.shortcut.shortcut_config import Shortcut
+    from core.client.shortcut.shortcut_manager import ShortcutManager
+    from core.client.state import ClientState
 
 
 
@@ -29,7 +33,13 @@ class ShortcutTask:
     单个快捷键的录音任务
 
     跟踪每个快捷键独立的录音状态，防止互相干扰。
+    每个任务只服务一个音频源（麦克风 / 系统音频），两路互不阻塞。
     """
+
+    # 由 ShortcutManager 注入
+    _manager_ref: Callable[[], ShortcutManager | None] | None = None
+    pool: ThreadPoolExecutor | None = None
+    threshold: float = 0.3
 
     def __init__(self, app: CapsWriterClient, shortcut: Shortcut, recorder_class=None):
         """
@@ -45,7 +55,7 @@ class ShortcutTask:
         self._recorder_class = recorder_class
 
         # 任务状态
-        self.task: Optional[asyncio.Future] = None
+        self.task: Future[None] | None = None
         self.recording_start_time: float = 0.0
         self.is_recording: bool = False
 
@@ -65,29 +75,44 @@ class ShortcutTask:
         """快捷访问状态单例"""
         return self.app.state
 
+    @property
+    def source(self) -> str:
+        """该快捷键录音的音频源（'mic' / 'system'）"""
+        return self.shortcut.source
+
     def _get_recorder(self) -> AudioRecorder:
-        """获取 AudioRecorder 实例"""
+        """获取 AudioRecorder 实例（绑定当前快捷键的音频源）"""
         if self._recorder_class is None:
             from core.client.audio.recorder import AudioRecorder
             self._recorder_class = AudioRecorder
-        return self._recorder_class(self.app)
+        return self._recorder_class(self.app, self.source)
+
+    def _should_mute_system_audio(self) -> bool:
+        """录音时是否要静音系统输出（录系统音频本身、或系统音频正在录音时都不用静音）"""
+        if not Config.mute_system_audio:
+            return False
+        if self.source == 'system':
+            return False
+        return not self.state.is_recording('system')
 
     def launch(self) -> None:
         """启动录音任务"""
-        logger.info(f"[{self.shortcut.key}] 触发：开始录音")
+        logger.info(f"[{self.shortcut.key}] 触发：开始录音（音频源: {self.source}）")
 
         # 记录开始时间
         self.recording_start_time = time.time()
         self.is_recording = True
 
-        # 将开始标志放入队列
+        # 将开始标志放入对应音频源的队列
         asyncio.run_coroutine_threadsafe(
-            self.state.queue_in.put({'type': 'begin', 'time': self.recording_start_time, 'data': None}),
+            self.state.queue(self.source).put(
+                {'type': 'begin', 'time': self.recording_start_time, 'data': None}
+            ),
             self.app.loop
         )
 
         # 更新录音状态
-        self.state.start_recording(self.recording_start_time)
+        self.state.start_recording(self.recording_start_time, self.source)
 
         # 打印动画：正在录音
         self._status.start()
@@ -95,12 +120,12 @@ class ShortcutTask:
         # 通知音频流管理器（灵动岛上膛 + 系统音频唤醒）
         try:
             if self.app.stream:
-                self.app.stream.notify_recording_start()
+                self.app.stream.notify_recording_start(self.source)
         except Exception as e:
             logger.warning(f"[录音] 通知音频流失败: {e}")
 
-        # 静音系统声音（系统音频捕获时不静音）
-        if Config.mute_system_audio and not self.state.system_audio_active:
+        # 静音系统声音（录系统音频时不静音）
+        if self._should_mute_system_audio():
             SystemAudioMute.mute()
 
         # 启动识别任务
@@ -115,7 +140,7 @@ class ShortcutTask:
         logger.debug(f"[{self.shortcut.key}] 取消录音任务（时间过短）")
 
         self.is_recording = False
-        self.state.stop_recording()
+        self.state.stop_recording(self.source)
         self._status.stop()
 
         # 灵动岛：取消 → 回空闲态
@@ -124,37 +149,38 @@ class ShortcutTask:
             island = _get_island()
             if island:
                 island.idle()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[灵动岛] 回空闲态失败: {e}")
 
-        # 恢复系统声音（系统音频捕获时没静音，无需恢复）
-        if Config.mute_system_audio and not self.state.system_audio_active:
+        # 恢复系统声音（录系统音频时没静音，无需恢复）
+        if self._should_mute_system_audio():
             SystemAudioMute.unmute()
 
-        self.task.cancel()
+        if self.task is not None:
+            self.task.cancel()
         self.task = None
 
     def finish(self) -> None:
         """完成录音任务"""
-        logger.info(f"[{self.shortcut.key}] 释放：完成录音")
+        logger.info(f"[{self.shortcut.key}] 释放：完成录音（音频源: {self.source}）")
 
         self.is_recording = False
-        self.state.stop_recording()
+        self.state.stop_recording(self.source)
         self._status.stop()
 
         # 通知音频流管理器（灵动岛进入识别态）
         try:
             if self.app.stream:
-                self.app.stream.notify_recording_stop()
+                self.app.stream.notify_recording_stop(self.source)
         except Exception as e:
             logger.warning(f"[录音] 通知音频流停止失败: {e}")
 
-        # 恢复系统声音（系统音频捕获时没静音，无需恢复）
-        if Config.mute_system_audio and not self.state.system_audio_active:
+        # 恢复系统声音（录系统音频时没静音，无需恢复）
+        if self._should_mute_system_audio():
             SystemAudioMute.unmute()
 
         asyncio.run_coroutine_threadsafe(
-            self.state.queue_in.put({
+            self.state.queue(self.source).put({
                 'type': 'finish',
                 'time': time.time(),
                 'data': None
@@ -171,6 +197,9 @@ class ShortcutTask:
         """恢复按键状态（防自捕获逻辑由 ShortcutManager 处理）"""
         # 通知管理器执行 restore
         # 防自捕获：管理器会设置 flag 再发送按键
+        if self._manager_ref is None:
+            logger.warning(f"[{self.shortcut.key}] manager 引用丢失，无法 restore")
+            return
         manager = self._manager_ref()
         if manager:
             logger.debug(f"[{self.shortcut.key}] 自动恢复按键状态 (suppress={self.shortcut.suppress})")
