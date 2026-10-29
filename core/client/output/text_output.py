@@ -116,6 +116,16 @@ class TextOutput:
         
         # 粘贴结果（使用 pynput 模拟 Ctrl+V）
         controller = pynput_keyboard.Controller()
+        # 先标记：接下来的修饰键是程序自己发出的，别被快捷键监听器当成听写触发
+        try:
+            from core.client.shortcut.emulator import ShortcutEmulator
+
+            ShortcutEmulator.mark_synthetic(
+                'cmd' if platform.system() == 'Darwin' else 'ctrl'
+            )
+        except ImportError:
+            pass  # 快捷键模块不可用时不影响粘贴本身
+
         if platform.system() == 'Darwin':
             # macOS: Command+V
             with controller.pressed(pynput_keyboard.Key.cmd):

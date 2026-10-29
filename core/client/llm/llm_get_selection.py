@@ -42,6 +42,13 @@ def get_selected_text(role_config, state) -> str:
         original_clipboard = safe_paste()
 
         # 模拟 Ctrl+C 复制选中的文字
+        # 先标记：这是程序自己发出的 Ctrl，别被快捷键监听器当成听写触发
+        try:
+            from core.client.shortcut.emulator import ShortcutEmulator
+
+            ShortcutEmulator.mark_synthetic('ctrl')
+        except ImportError:
+            pass
         keyboard.press_and_release('ctrl+c')
 
         # 等待复制操作完成
