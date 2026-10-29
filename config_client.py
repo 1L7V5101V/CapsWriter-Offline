@@ -39,7 +39,18 @@ class ClientConfig:
             'enabled': True,
             'source': 'system',     # 录音来源：系统音频（扬声器回环）
         },
-        # 想改用键盘录系统音频时，把上面这块换成下面这块（注意 Alt 会吞掉 Alt+Tab）
+        # 想用键盘录系统音频也可，把下面这块取消注释（与鼠标侧键可以同时保留）
+        {
+            'key': 'ctrl',         # 长按 Ctrl 录音，松开上屏（录系统音频）
+            'type': 'keyboard',
+            # suppress=False：不吞掉 Ctrl，Ctrl+C / Ctrl+V / Ctrl+Tab 照常可用
+            # （若要吞掉，改成 True，但那样 Ctrl+任意键 都会失效）
+            'suppress': False,
+            'hold_mode': True,
+            'enabled': True,
+            'source': 'system',
+        },
+        # Alt 方案（不建议：suppress=True 会吞掉 Alt+Tab / Alt+F4）
         # {
         #     'key': 'alt',         # 长按 Alt 录音，松开上屏（录系统音频）
         #     'type': 'keyboard',
@@ -163,11 +174,10 @@ r"""
   功能键：f1 - f24
 
   控制键:
-      alt（= alt_l，按住左/右 Alt 均可，推荐用于系统音频听写）
-      ctrl_l,   ctrl_r,
-      shift,  shift_r,
-      alt_l,    alt_gr,
-      cmd,    cmd_r
+      ctrl（= ctrl_l / ctrl_r，左右 Ctrl 均可，推荐用于系统音频听写）
+      alt（= alt_l，按住左/右 Alt 均可）
+      shift（= shift_l / shift_r）
+      cmd（= cmd_r）
 
   特殊键：
       space, enter, tab, backspace, delete, insert, home, end
@@ -181,6 +191,7 @@ r"""
 示例配置：
   {'key': 'caps_lock', 'type': 'keyboard', 'suppress': False, 'hold_mode': True, 'enabled': True, 'source': 'mic'},
   {'key': 'x1', 'type': 'mouse', 'suppress': True, 'hold_mode': True, 'enabled': True, 'source': 'system'},
+  {'key': 'ctrl', 'type': 'keyboard', 'suppress': False, 'hold_mode': True, 'enabled': True, 'source': 'system'},
   {'key': 'f12', 'type': 'keyboard', 'suppress': True, 'hold_mode': True, 'enabled': True, 'source': 'mic'},
   {'key': 'x2', 'type': 'mouse', 'suppress': True, 'hold_mode': True, 'enabled': True, 'source': 'mic'},
 """

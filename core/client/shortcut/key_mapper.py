@@ -50,6 +50,14 @@ KEY_UP_MESSAGES = (WM_KEYUP, WM_SYSKEYUP)
 KEY_DOWN_MESSAGES = (WM_KEYDOWN, WM_SYSKEYDOWN)
 MOUSE_MESSAGES = (WM_XBUTTONDOWN, WM_XBUTTONUP)
 
+# 修饰键别名：左右修饰键的 VK 不同，需归一到同一个名字，才能用 'ctrl' 这样的键名匹配
+MODIFIER_ALIASES = {
+    'ctrl_l': 'ctrl', 'ctrl_r': 'ctrl',
+    'alt_l': 'alt', 'alt_r': 'alt', 'alt_gr': 'alt',
+    'shift_l': 'shift', 'shift_r': 'shift',
+    'cmd_l': 'cmd', 'cmd_r': 'cmd',
+}
+
 # 可恢复的切换键（需要录音完成后恢复状态的锁键）
 RESTORABLE_KEYS = {
     'caps_lock',    # 大写锁定
@@ -99,7 +107,8 @@ class KeyMapper:
         """
         # 首先检查是否是特殊键（pynput Key 枚举）
         if vk in _SPECIAL_KEYS:
-            return _SPECIAL_KEYS[vk].name
+            key_name = _SPECIAL_KEYS[vk].name
+            return MODIFIER_ALIASES.get(key_name, key_name)
 
         # 检查是否是小键盘按键
         if vk in NUMPAD_KEYS:
@@ -127,6 +136,9 @@ class KeyMapper:
         Returns:
             pynput 按键对象或 None
         """
+        # 修饰键变体（ctrl_l / ctrl_r 等）归一化后再查表
+        key_name = MODIFIER_ALIASES.get(key_name, key_name)
+
         # 特殊按键
         special_keys = KeyMapper._get_special_key_objects()
         if key_name in special_keys:

@@ -13,7 +13,7 @@
 ## 架构细节与流程 (Architecture & Workflows)
 
 ### 1. 识别全链路 (Recognition Flow)
-- **采集**: Client 监听快捷键（默认 CapsLock、X2 录麦克风，Alt 录系统音频）。按下就开始收集录音chunk，超过 **0.3s (Threshold)** 不松则触发识别，**实时流式**通过 WebSocket 发送。
+- **采集**: Client 监听快捷键（默认 CapsLock、X2 录麦克风；X1 鼠标侧键、Ctrl 录系统音频），两路可同时录音。按下就开始收集录音chunk，超过 **0.3s (Threshold)** 不松则触发识别，**实时流式**通过 WebSocket 发送。
 - **双源并行**: 每个快捷键通过 `source` 字段绑定音频源（`'mic'` / `'system'`）。两路各有独立队列（`ClientState.queue_in` / `queue_system`）、独立 `AudioRecorder`、独立 WebSocket 任务，可**同时录音同时出字**；系统音频由 `core/client/audio/wasapi_loopback.py` 的 soundcard 回环采集提供（16kHz 单声道），与文件转录完全解耦。服务端在 [`core/server/connection/ws_recv.py`](core/server/connection/ws_recv.py) 按 `msg.source` 分槽缓存，互不污染。
 - **切片 (Slicing)**: Client 配置 `mic_seg_duration` (60s) 和 `mic_seg_overlap` (4s)。Server 仅基于时间切片，**禁用 VAD** 以保留完整上下文。
 - **Server 处理**:
