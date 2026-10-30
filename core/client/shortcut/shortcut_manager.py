@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
@@ -43,6 +44,16 @@ if TYPE_CHECKING:
 _KEY_ALIASES: dict[str, tuple[str, ...]] = {
     'alt': ('alt_l', 'alt_gr'),
 }
+
+# pynput 通过抛出这个异常来“吞掉”当前事件，必须让它穿透过滤器，否则阻塞失效
+try:
+    from pynput._util.win32 import SystemHook as _SystemHook
+
+    _SUPPRESS_EXCEPTIONS: tuple[type[BaseException], ...] = (
+        _SystemHook.SuppressException,
+    )
+except Exception:  # pragma: no cover - 非 Windows 平台
+    _SUPPRESS_EXCEPTIONS = ()
 
 
 def _suppress_event(listener) -> None:
@@ -120,72 +131,93 @@ class ShortcutManager:
     def create_keyboard_filter(self):
         """创建键盘事件过滤器"""
         def win32_event_filter(msg, data):
-            # 只处理 KEYDOWN 和 KEYUP 消息
-            if msg not in KEYBOARD_MESSAGES:
+            # 过滤器内抛异常会杀死监听线程，从而彻底丢失快捷键
+            try:
+                return self._handle_keyboard_message(msg, data)
+            except _SUPPRESS_EXCEPTIONS:
+                raise  # 交给 pynput 吞掉本次事件
+            except Exception as exc:
+                logger.error(f"键盘事件处理异常: {exc}")
                 return True
-
-            key_name = KeyMapper.vk_to_name(data.vkCode)
-
-            # 防自捕获检查
-            if self._check_emulating(key_name, msg):
-                return True
-            if self._check_restoring(key_name, msg):
-                return True
-
-            # 查找匹配的快捷键
-            if key_name not in self.tasks:
-                return True
-
-            task = self.tasks[key_name]
-
-            # 处理按键事件
-            if msg in KEY_DOWN_MESSAGES:
-                self._event_handler.handle_keydown(key_name, task)
-            elif msg in KEY_UP_MESSAGES:
-                self._event_handler.handle_keyup(key_name, task)
-
-            # 阻塞事件
-            if task.shortcut.suppress and self.keyboard_listener:
-                _suppress_event(self.keyboard_listener)
-
-            return True
 
         return win32_event_filter
+
+    def _handle_keyboard_message(self, msg, data) -> bool:
+        """处理单条键盘消息"""
+        # 只处理 KEYDOWN 和 KEYUP 消息
+        if msg not in KEYBOARD_MESSAGES:
+            return True
+
+        key_name = KeyMapper.vk_to_name(data.vkCode)
+
+        # 防自捕获检查
+        if self._check_emulating(key_name, msg):
+            return True
+        if self._check_restoring(key_name, msg):
+            return True
+
+        # 查找匹配的快捷键
+        if key_name not in self.tasks:
+            return True
+
+        task = self.tasks[key_name]
+
+        # 处理按键事件
+        if msg in KEY_DOWN_MESSAGES:
+            self._event_handler.handle_keydown(key_name, task)
+        elif msg in KEY_UP_MESSAGES:
+            self._event_handler.handle_keyup(key_name, task)
+
+        # 阻塞事件
+        if task.shortcut.suppress and self.keyboard_listener:
+            _suppress_event(self.keyboard_listener)
+
+        return True
 
     def create_mouse_filter(self):
         """创建鼠标事件过滤器"""
         def win32_event_filter(msg, data):
-            # 只处理 XBUTTON 消息
-            if msg not in MOUSE_MESSAGES:
+            try:
+                return self._handle_mouse_message(msg, data)
+            except _SUPPRESS_EXCEPTIONS:
+                raise  # 交给 pynput 吞掉本次事件
+            except Exception as exc:
+                logger.error(f"鼠标事件处理异常: {exc}")
                 return True
-
-            # 获取按键标识
-            xbutton = (data.mouseData >> 16) & 0xFFFF
-            button_name = 'x1' if xbutton == XBUTTON1 else 'x2'
-
-            # 防自捕获检查
-            if self._check_emulating(button_name, msg, is_mouse=True):
-                return True
-
-            # 查找匹配的快捷键
-            if button_name not in self.tasks:
-                return True
-
-            task = self.tasks[button_name]
-
-            # 处理鼠标事件
-            if msg == WM_XBUTTONDOWN:
-                self._event_handler.handle_keydown(button_name, task)
-            elif msg == WM_XBUTTONUP:
-                self._handle_mouse_keyup(button_name, task)
-
-            # 阻塞事件
-            if task.shortcut.suppress and self.mouse_listener:
-                _suppress_event(self.mouse_listener)
-
-            return True
 
         return win32_event_filter
+
+    def _handle_mouse_message(self, msg, data) -> bool:
+        """处理单条鼠标消息"""
+        # 只处理 XBUTTON 消息
+        if msg not in MOUSE_MESSAGES:
+            return True
+
+        # 获取按键标识
+        xbutton = (data.mouseData >> 16) & 0xFFFF
+        button_name = 'x1' if xbutton == XBUTTON1 else 'x2'
+
+        # 防自捕获检查
+        if self._check_emulating(button_name, msg, is_mouse=True):
+            return True
+
+        # 查找匹配的快捷键
+        if button_name not in self.tasks:
+            return True
+
+        task = self.tasks[button_name]
+
+        # 处理鼠标事件
+        if msg == WM_XBUTTONDOWN:
+            self._event_handler.handle_keydown(button_name, task)
+        elif msg == WM_XBUTTONUP:
+            self._handle_mouse_keyup(button_name, task)
+
+        # 阻塞事件
+        if task.shortcut.suppress and self.mouse_listener:
+            _suppress_event(self.mouse_listener)
+
+        return True
 
     def _handle_mouse_keyup(self, button_name: str, task) -> None:
         """处理鼠标按键释放事件"""
@@ -289,6 +321,13 @@ class ShortcutManager:
                 )
                 self.keyboard_listener.start()
                 logger.info("键盘监听器已启动")
+                self._watch_listener(
+                    "键盘",
+                    self.keyboard_listener,
+                    lambda: keyboard.Listener(
+                        win32_event_filter=self.create_keyboard_filter()
+                    ),
+                )
 
         if has_mouse:
             if self.mouse_listener and self.mouse_listener.is_alive():
@@ -299,6 +338,13 @@ class ShortcutManager:
                 )
                 self.mouse_listener.start()
                 logger.info("鼠标监听器已启动")
+                self._watch_listener(
+                    "鼠标",
+                    self.mouse_listener,
+                    lambda: mouse.Listener(
+                        win32_event_filter=self.create_mouse_filter()
+                    ),
+                )
 
         # 打印所有启用的快捷键
         for shortcut in self.shortcuts:
@@ -306,6 +352,36 @@ class ShortcutManager:
                 mode = "长按" if shortcut.hold_mode else "单击"
                 toggle = "可恢复" if shortcut.is_toggle_key() else "普通键"
                 logger.info(f"  [{shortcut.key}] {mode}模式, 阻塞:{shortcut.suppress}, {toggle}")
+
+    def _watch_listener(self, label: str, listener, factory) -> None:
+        """延迟校验监听器是否存活，必要时重建
+
+        SetWindowsHookEx 偶发安装失败（例如上一个实例的钩子尚未释放），
+        此时 Listener.start() 不会报错但收不到任何事件，只能靠存活检查发现。
+        """
+
+        def check() -> None:
+            time.sleep(1.5)
+            if listener.is_alive():
+                return
+
+            logger.warning(f"{label}监听器未存活，尝试重建")
+            retry = factory()
+            retry.start()
+            time.sleep(1.5)
+            if not retry.is_alive():
+                logger.error(f"{label}监听器重建失败，相关快捷键不可用")
+                return
+
+            if label == "键盘":
+                self.keyboard_listener = retry
+            else:
+                self.mouse_listener = retry
+            logger.info(f"{label}监听器已重建")
+
+        threading.Thread(
+            target=check, name=f"listener-watch-{label}", daemon=True
+        ).start()
 
     def stop(self) -> None:
         """停止所有监听器和清理资源"""
