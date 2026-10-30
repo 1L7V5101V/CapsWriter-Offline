@@ -39,26 +39,30 @@ class ClientConfig:
             'enabled': True,
             'source': 'system',     # 录音来源：系统音频（扬声器回环）
         },
-        # 想用键盘录系统音频也可，把下面这块取消注释（与鼠标侧键可以同时保留）
+        # 想用键盘录系统音频也可，与鼠标侧键可以同时保留
         {
-            'key': 'ctrl',         # 长按 Ctrl 录音，松开上屏（录系统音频）
+            'key': 'alt',           # 长按 Alt 录音，松开上屏（录系统音频）
             'type': 'keyboard',
-            # suppress=False：不吞掉 Ctrl，Ctrl+C / Ctrl+V / Ctrl+Tab 照常可用
-            # （若要吞掉，改成 True，但那样 Ctrl+任意键 都会失效）
+            # suppress=False：不吞掉 Alt，Alt+Tab / Alt+F4 / Alt+空格 照常可用
+            # （若要吞掉改成 True，但那样所有 Alt 组合键都会失效）
             'suppress': False,
             'hold_mode': True,
+            'threshold': 0.5,      # 比默认 0.3s 长一点，减少组合键误触发
             'enabled': True,
+            'source': 'system',     # 录音来源：系统音频（扬声器回环）
+        },
+        # Ctrl 方案（默认关闭：Ctrl 日常用得太频繁，按住超过阈值就会漏录音）
+        {
+            'key': 'ctrl',         # 长按 Ctrl 录音（录系统音频）
+            'type': 'keyboard',
+            'suppress': False,
+            'hold_mode': True,
+            'enabled': False,
             'source': 'system',
         },
-        # Alt 方案（不建议：suppress=True 会吞掉 Alt+Tab / Alt+F4）
-        # {
-        #     'key': 'alt',         # 长按 Alt 录音，松开上屏（录系统音频）
-        #     'type': 'keyboard',
-        #     'suppress': True,
-        #     'hold_mode': True,
-        #     'enabled': True,
-        #     'source': 'system',
-        # },
+        # 想换成别的键？把 'key' 改成任意可用键即可（见文件末尾“可用按键名称”）：
+        #   {'key': 'f12', 'type': 'keyboard', 'suppress': True, 'hold_mode': True,
+        #    'enabled': True, 'source': 'system'},
     ]
 
     threshold    = 0.3          # 快捷键触发阈值（秒）
@@ -174,8 +178,8 @@ r"""
   功能键：f1 - f24
 
   控制键:
-      ctrl（= ctrl_l / ctrl_r，左右 Ctrl 均可，推荐用于系统音频听写）
-      alt（= alt_l，按住左/右 Alt 均可）
+      ctrl（= ctrl_l / ctrl_r，左右 Ctrl 均可；太常用，不建议绑听写）
+      alt（= alt_l / alt_gr，左右 Alt 均可，推荐用于系统音频听写）
       shift（= shift_l / shift_r）
       cmd（= cmd_r）
 
@@ -191,7 +195,7 @@ r"""
 示例配置：
   {'key': 'caps_lock', 'type': 'keyboard', 'suppress': False, 'hold_mode': True, 'enabled': True, 'source': 'mic'},
   {'key': 'x1', 'type': 'mouse', 'suppress': True, 'hold_mode': True, 'enabled': True, 'source': 'system'},
-  {'key': 'ctrl', 'type': 'keyboard', 'suppress': False, 'hold_mode': True, 'enabled': True, 'source': 'system'},
+  {'key': 'alt', 'type': 'keyboard', 'suppress': False, 'hold_mode': True, 'enabled': True, 'source': 'system'},
   {'key': 'f12', 'type': 'keyboard', 'suppress': True, 'hold_mode': True, 'enabled': True, 'source': 'mic'},
   {'key': 'x2', 'type': 'mouse', 'suppress': True, 'hold_mode': True, 'enabled': True, 'source': 'mic'},
 """
